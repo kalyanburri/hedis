@@ -503,7 +503,7 @@ set
     => ByteString -- ^ key
     -> ByteString -- ^ value
     -> m (f Status)
-set key value = sendRequest ["SET", key, value]
+set key value = sendRequest ["SET2", key, value]
 
 
 data Condition = Nx | Xx deriving (Show, Eq)

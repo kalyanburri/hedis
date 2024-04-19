@@ -703,7 +703,7 @@ get
     :: (RedisCtx m f)
     => ByteString -- ^ key
     -> m (f (Maybe ByteString))
-get key = sendRequest (["GET"] ++ [encode key] )
+get key = sendRequest (["GET2"] ++ [encode key] )
 
 getrange
     :: (RedisCtx m f)
