@@ -475,7 +475,7 @@ allMasterNodes (ShardMap shardMap) nodeConns = do
 
 requestNode :: NodeConnection -> [[B.ByteString]] -> IO [Reply]
 requestNode (NodeConnection pool _) requests = withResource pool $ \(ctx, lastRecvRef) -> do
-    envTimeout <- round . (\x -> (x :: Time.NominalDiffTime) * 1000000) . realToFrac . fromMaybe (0.5 :: Double) . (>>= readMaybe) <$> lookupEnv "REDIS_REQUEST_NODE_TIMEOUT"
+    envTimeout <- round . (\x -> (x :: Time.NominalDiffTime) * 1000000) . realToFrac . fromMaybe (5 :: Double) . (>>= readMaybe) <$> lookupEnv "REDIS_REQUEST_NODE_TIMEOUT"
     mayberesp <- timeout envTimeout $ requestNodeImpl ctx lastRecvRef
     case mayberesp of
       Just a    -> return a
