@@ -305,7 +305,7 @@ retryBatch refreshShardmapAction conn@(Connection _ infoMap _) retryCount reques
         (Error errString) | B.isPrefixOf "MOVED" errString -> do
             keys <- mconcat <$> mapM (requestKeys infoMap) requests
             hashSlot <- hashSlotForKeys (CrossSlotException requests) keys
-            nodeConn <- nodeConnForHashSlot conn (MissingNodeException (head requests)) hashSlot
+            nodeConn <- nodeConnForHashSlot conn ("retryBatch" : head requests) hashSlot
             requestNode nodeConn requests
         (askingRedirection -> Just (host, port)) -> do
             maybeAskNode <- nodeConnWithHostAndPort conn host port
@@ -335,7 +335,7 @@ evaluateTransactionPipeline refreshShardmapAction conn requests' = do
     -- the commands in a transaction are applied and some are not. Better to
     -- fail early.
     hashSlot <- hashSlotForKeys (CrossSlotException requests) keys
-    nodeConn <- nodeConnForHashSlot conn (MissingNodeException (head requests)) hashSlot
+    nodeConn <- nodeConnForHashSlot conn ("evaluateTransactionPipeline" : head requests) hashSlot
     -- catch the exception thrown, send the command to random node.
     -- This change is required to handle the cluster topology change.
     eresps <- try $ requestNode nodeConn requests
@@ -347,7 +347,7 @@ evaluateTransactionPipeline refreshShardmapAction conn requests' = do
             case fromException err of
                 Just (er :: TimeoutException) -> throwIO er
                 _ -> do
-                    newNodeConn <- nodeConnForHashSlot conn (MissingNodeException (head requests)) hashSlot
+                    newNodeConn <- nodeConnForHashSlot conn ("TimeoutException in evaluateTransactionPipeline" : head requests) hashSlot
                     requestNode newNodeConn requests
     -- The Redis documentation has the following to say on the effect of
     -- resharding on multi-key operations:
@@ -378,7 +378,7 @@ evaluateTransactionPipeline refreshShardmapAction conn requests' = do
     loopM (\case 
         heads:tails   -> if moved heads then do
                             void $ hasLocked $ refreshShardmapAction
-                            newNodeConn <- nodeConnForHashSlot conn (MissingNodeException (head requests)) hashSlot
+                            newNodeConn <- nodeConnForHashSlot conn ("Error in evaluateTransactionPipeline moved retry" : head requests) hashSlot
                             Right <$> requestNode newNodeConn requests
                         else 
                             case askingRedirection heads of
@@ -389,22 +389,22 @@ evaluateTransactionPipeline refreshShardmapAction conn requests' = do
                                             Just askNode -> Right . tail <$> requestNode askNode (["ASKING"] : requests)
                                             Nothing -> do
                                                 void $ hasLocked $ refreshShardmapAction
-                                                newNodeConn <- nodeConnForHashSlot conn (MissingNodeException (head requests)) hashSlot
+                                                newNodeConn <- nodeConnForHashSlot conn ("Error in evaluateTransactionPipeline ASK retry" : head requests) hashSlot
                                                 Right <$> requestNode newNodeConn requests
                                 Nothing -> return $ Left tails
         []          -> return $ Right resps) resps
 
-nodeConnForHashSlot :: Exception e => Connection -> e -> HashSlot -> IO NodeConnection
-nodeConnForHashSlot conn exception hashSlot = do
+nodeConnForHashSlot :: Connection -> [B.ByteString] -> HashSlot -> IO NodeConnection
+nodeConnForHashSlot conn errInfo hashSlot = do
     let (Connection shardNodeVar _ _) = conn
     (ShardMap shardMap, nodeConns) <- hasLocked $ readMVar shardNodeVar
     node <-
         case IntMap.lookup (fromEnum hashSlot) shardMap of
-            Nothing -> throwIO exception
+            Nothing -> throwIO $ MissingNodeException ("HashSlot lookup failed in nodeConnForHashSlot" : errInfo)
             Just (Shard master _) -> return master
     case HM.lookup (nodeId node) nodeConns of
         Nothing -> do
-            throwIO exception
+            throwIO $ MissingNodeException ("NodeId lookup failed in nodeConnForHashSlot" : errInfo)
         Just nodeConn' -> return nodeConn'
 
 hashSlotForKeys :: Exception e => e -> [B.ByteString] -> IO HashSlot
@@ -457,14 +457,14 @@ nodeConnectionForCommand (ShardMap shardMap) nodeConns infoMap request =
             keys <- requestKeys infoMap request
             hashSlot <- hashSlotForKeys (CrossSlotException [request]) keys
             node <- case IntMap.lookup (fromEnum hashSlot) shardMap of
-                Nothing -> throwIO $ MissingNodeException request
+                Nothing -> throwIO $ MissingNodeException ("HashSlot lookup failed in nodeConnectionForCommand" : request)
                 Just (Shard master _) -> return master
-            maybe (throwIO $ MissingNodeException request) (return . return) (HM.lookup (nodeId node) nodeConns)
+            maybe (throwIO $ MissingNodeException ("NodeId lookup failed in nodeConnectionForCommand" : request)) (return . return) (HM.lookup (nodeId node) nodeConns)
     where
         allNodes = do
             maybeNodes <- allMasterNodes (ShardMap shardMap) nodeConns
             case maybeNodes of
-                Nothing -> throwIO $ MissingNodeException request
+                Nothing -> throwIO $ MissingNodeException ("Master node lookup failed" : request)
                 Just allNodes' -> return allNodes'
 
 allMasterNodes :: ShardMap -> NodeConnectionMap -> IO (Maybe [NodeConnection])
